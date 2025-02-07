@@ -24,7 +24,7 @@ public class StoreUser {
     @Column(name = "is_admin")
     private Boolean isAdmin;
 
-    protected StoreUser() {}
+    public StoreUser() {}
 
     public StoreUser(String name) {
         this.fullName = name;

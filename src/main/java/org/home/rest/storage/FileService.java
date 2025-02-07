@@ -7,6 +7,7 @@ import org.home.repository.StoreSpaceAccessRepository;
 import org.home.repository.model.*;
 import org.home.rest.config.StoreUserDetails;
 import org.home.rest.users.UserService;
+import org.home.service.StoreUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,11 +22,12 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
 @RestController
-@RequestMapping("/api/storage")
+@RequestMapping("/api/storage/files")
 public class FileService {
     Logger logger = LoggerFactory.getLogger(UserService.class);
 
@@ -59,6 +61,7 @@ public class FileService {
     }
 
     @PostMapping("/files/new")
+    @PostMapping("/new")
     public ResponseEntity<Object> uploadFile(@AuthenticationPrincipal StoreUserDetails userDetails,
                                              @RequestParam("file") MultipartFile httpFile,
                                              @RequestParam(value = "spaceId", required = false) Long spaceId) {
@@ -69,7 +72,7 @@ public class FileService {
         logger.debug("Space[{}], Upload file: '{}', size: {}",
                 spaceId, httpFile.getOriginalFilename(), httpFile.getSize());
 
-        StoreSpace space = getSpace(userDetails.storeUser, spaceId, StoreAccessRight.WRITE);
+        StoreSpace space = StoreUtils.getSpace(userDetails.storeUser.getId(), spaceId, StoreAccessRight.WRITE);
         if (space == null) {
             return new ResponseEntity<>(HttpStatus.FORBIDDEN);
         }
@@ -91,10 +94,10 @@ public class FileService {
         }
     }
 
-    @GetMapping("/files/list")
+    @GetMapping("/list")
     public ResponseEntity<List<StoreFile>> listFiles(@AuthenticationPrincipal StoreUserDetails userDetails,
                                                      @RequestParam(value = "spaceId", required = false) Long spaceId) {
-        StoreSpace space = getSpace(userDetails.storeUser, spaceId, StoreAccessRight.READ);
+        StoreSpace space = StoreUtils.getSpace(userDetails.storeUser.getId(), spaceId, StoreAccessRight.READ);
         if (space == null) {
             return new ResponseEntity<>(HttpStatus.FORBIDDEN);
         }
@@ -102,31 +105,7 @@ public class FileService {
         return new ResponseEntity<>(storeFileRepository.findBySpaceId(space.getId()), HttpStatus.OK);
     }
 
-    private long getFileAccess(StoreFile file, StoreUser user) {
-        Long fileSpaceId = file.getSpace().getId();
-        long result = StoreAccessRight.NONE;
-
-        StoreSpace selfSpace = storeSpaceRepository.findByOwner(user);
-        if (!selfSpace.getId().equals(fileSpaceId)) {
-            StoreSpaceAccess spaceAccess = spaceAccessRepository.findByUserIdAndSpaceId(user.getId(), fileSpaceId);
-            if (spaceAccess != null) {
-                result = spaceAccess.getAccessRight();
-            }
-        } else {
-            result = StoreAccessRight.CONTROL;
-        }
-
-        if (result != StoreAccessRight.CONTROL) {
-            StoreFileAccess fileAccess = fileAccessRepository.findByUserIdAndFileId(user.getId(), file.getId());
-            if (fileAccess != null) {
-                result |= fileAccess.getAccessRight();
-            }
-        }
-
-        return result;
-    }
-
-    @GetMapping("/files/{fileId}")
+    @GetMapping("/{fileId}")
     public ResponseEntity<byte[]> downloadFile(@AuthenticationPrincipal StoreUserDetails userDetails,
                                                @PathVariable Long fileId) {
         Optional<StoreFile> opFile = storeFileRepository.findById(fileId);
@@ -136,7 +115,7 @@ public class FileService {
 
         StoreFile file = opFile.get();
 
-        if ((getFileAccess(file, userDetails.storeUser) & StoreAccessRight.READ) != 0) {
+        if ((StoreUtils.getFileAccess(file, userDetails.storeUser) & StoreAccessRight.READ) != 0) {
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType(file.getType()))
                     .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.getName() + "\"")
@@ -146,7 +125,7 @@ public class FileService {
         }
     }
 
-    @DeleteMapping("/files/{fileId}")
+    @DeleteMapping("/{fileId}")
     public ResponseEntity<StoreFile> deleteFile(@AuthenticationPrincipal StoreUserDetails userDetails,
                                                 @PathVariable Long fileId) {
         Optional<StoreFile> opFile = storeFileRepository.findById(fileId);
@@ -155,12 +134,54 @@ public class FileService {
         }
 
         StoreFile file = opFile.get();
-        if ((getFileAccess(file, userDetails.storeUser) & StoreAccessRight.WRITE) != 0) {
+        if ((StoreUtils.getFileAccess(file, userDetails.storeUser) & StoreAccessRight.WRITE) != 0) {
             storeFileRepository.delete(file);
 
             return new ResponseEntity<>(file, HttpStatus.OK);
         } else {
             return new ResponseEntity<>(HttpStatus.FORBIDDEN);
         }
+    }
+
+    @PostMapping("/{fileId}/grant")
+    public ResponseEntity<String> grant(@AuthenticationPrincipal StoreUserDetails userDetails,
+                                        @PathVariable Long fileId, @RequestBody Map<String, Object> data) {
+        Long userId         = ((Number) data.get("userId")).longValue();
+        Long newAccessRight = ((Number) data.get("accessRight")).longValue() & StoreAccessRight.RW;
+
+        if (userId.equals(userDetails.storeUser.getId())) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        Optional<StoreFile> file = storeFileRepository.findById(fileId);
+        if (file.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        StoreSpace space = StoreUtils.getSpace(userDetails.storeUser.getId(), file.get().getSpace().getId(),
+                StoreAccessRight.CONTROL);
+        if (space == null) {
+            return new ResponseEntity<>(HttpStatus.FORBIDDEN);
+        }
+
+        if (space.getOwner().getId().equals(userId)) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        StoreFileAccess fileAccess = fileAccessRepository.findByUserIdAndFileId(userId, fileId);
+        if (fileAccess != null) {
+            fileAccess.setAccessRight(newAccessRight);
+        } else {
+            StoreUser user = new StoreUser();
+
+            user.setId(userId);
+
+            fileAccess = new StoreFileAccess(user, file.get());
+            fileAccess.setAccessRight(newAccessRight);
+
+            fileAccessRepository.save(fileAccess);
+        }
+
+        return ResponseEntity.ok("success");
     }
 }
