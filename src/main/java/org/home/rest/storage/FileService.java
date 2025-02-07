@@ -1,5 +1,6 @@
 package org.home.rest.storage;
 
+import jakarta.transaction.Transactional;
 import org.home.repository.StoreFileAccessRepository;
 import org.home.repository.StoreFileRepository;
 import org.home.repository.StoreSpaceRepository;
@@ -43,25 +44,8 @@ public class FileService {
     @Autowired
     StoreFileAccessRepository fileAccessRepository;
 
-    private StoreSpace getSpace(StoreUser user, Long spaceId, long accessRight) {
-        StoreSpace selfSpace = storeSpaceRepository.findByOwner(user);
-
-        if (spaceId == null || spaceId.equals(selfSpace.getId())) {
-            return selfSpace;
-        } else {
-            StoreSpaceAccess spaceAccess = spaceAccessRepository.findByUserIdAndSpaceId(user.getId(), spaceId);
-            if (spaceAccess != null) {
-                if ((spaceAccess.getAccessRight() & accessRight) != 0) {
-                    return spaceAccess.getSpace();
-                }
-            }
-        }
-
-        return null;
-    }
-
-    @PostMapping("/files/new")
     @PostMapping("/new")
+    @Transactional
     public ResponseEntity<Object> uploadFile(@AuthenticationPrincipal StoreUserDetails userDetails,
                                              @RequestParam("file") MultipartFile httpFile,
                                              @RequestParam(value = "spaceId", required = false) Long spaceId) {
@@ -77,16 +61,21 @@ public class FileService {
             return new ResponseEntity<>(HttpStatus.FORBIDDEN);
         }
 
-        /* TODO: Check free space */
+        if (space.getUsedSpaceSize() + httpFile.getSize() > space.getMaxSpaceSize()) {
+            return new ResponseEntity<>("not enough storage space", HttpStatus.BAD_REQUEST);
+        }
 
         try {
             StoreFile file = new StoreFile(space);
 
             file.setName(httpFile.getOriginalFilename());
             file.setType(httpFile.getContentType());
+            file.setDataSize(httpFile.getSize());
             file.setData(httpFile.getBytes());
 
             storeFileRepository.save(file);
+
+            space.setUsedSpaceSize(space.getUsedSpaceSize() + httpFile.getSize());
 
             return new ResponseEntity<>(file, HttpStatus.OK);
         } catch (IOException exception) {

@@ -22,6 +22,9 @@ public class StoreFile {
 
     private String type;
 
+    @Column(name = "data_size")
+    private Long dataSize;
+
     @Column(name = "data", columnDefinition = "bytea")
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private byte[] data;

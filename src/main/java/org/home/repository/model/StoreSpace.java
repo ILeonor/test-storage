@@ -16,6 +16,12 @@ public class StoreSpace {
     @JoinColumn(name = "user_id")
     public StoreUser owner;
 
+    @Column(name = "used_space_size")
+    private Long usedSpaceSize;
+
+    @Column(name = "max_space_size")
+    private Long maxSpaceSize;
+
     protected StoreSpace() {};
 
     public StoreSpace(StoreUser owner) {
